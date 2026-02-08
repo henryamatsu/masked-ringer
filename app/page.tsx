@@ -16,7 +16,6 @@ export default function HomePage() {
     }
     // Navigate to room page
     const roomPath = `/room/${encodeURIComponent(trimmedRoomName)}`;
-    console.log("Navigating to:", roomPath);
     router.push(roomPath);
   };
 

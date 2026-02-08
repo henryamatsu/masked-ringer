@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     if (!apiKey || !apiSecret) {
       return NextResponse.json(
-        { error: "Server misconfigured" },
+        { error: "LiveKit credentials not configured" },
         { status: 500 },
       );
     }
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ token });
   } catch (error) {
-    console.error("Error generating token:", error);
+    console.error("Error generating LiveKit token:", error);
     return NextResponse.json(
       { error: "Failed to generate token" },
       { status: 500 },
