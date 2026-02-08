@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npx convex codegen && next build",
+    "build:vercel": "npx convex deploy --yes --cmd \"npm run build\"",
     "start": "next start",
     "lint": "eslint",
     "postinstall": "npx convex codegen"
