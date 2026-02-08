@@ -22,7 +22,27 @@ export function AvatarScene({
   style,
 }: AvatarSceneProps) {
   return (
-    <Canvas style={style || { height: 600 }} camera={{ fov: 25 }} shadows>
+    <Canvas 
+      style={style || { height: 600 }} 
+      camera={{ fov: 25 }} 
+      shadows
+      gl={{ 
+        preserveDrawingBuffer: true,
+        antialias: true,
+        alpha: false,
+      }}
+      onCreated={({ gl }) => {
+        // Handle WebGL context loss
+        gl.domElement.addEventListener('webglcontextlost', (event) => {
+          event.preventDefault();
+          console.warn('WebGL context lost, attempting to restore...');
+        });
+        
+        gl.domElement.addEventListener('webglcontextrestored', () => {
+          console.log('WebGL context restored');
+        });
+      }}
+    >
       <ambientLight intensity={1} />
       <pointLight
         position={[10, 10, 10]}

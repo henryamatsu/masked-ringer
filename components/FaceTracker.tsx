@@ -17,7 +17,10 @@ export function FaceTracker({ children }: FaceTrackerProps) {
       <video
         ref={videoRef}
         autoPlay
+        playsInline
+        muted
         className="face-tracker-video"
+        style={{ display: 'none' }}
       />
       {children({ blendshapes, rotation })}
     </>
