@@ -22,6 +22,15 @@
   height: 300px;
 }
 
+.face-tracker-video {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  z-index: -1;
+}
+
 .logo {
   position: absolute;
   width: 128px;
