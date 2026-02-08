@@ -32,21 +32,32 @@ export function Avatar({ url, blendshapes, rotation, mirrored = false }: AvatarP
   }, [nodes, url]);
 
   useFrame(() => {
-    if (blendshapes.length > 0) {
+    if (blendshapes.length > 0 && headMesh.current.length > 0) {
       blendshapes.forEach((element) => {
         headMesh.current.forEach((mesh) => {
-          const index = mesh.morphTargetDictionary![element.categoryName];
-          if (index >= 0) mesh.morphTargetInfluences![index] = element.score;
+          if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) {
+            const index = mesh.morphTargetDictionary[element.categoryName];
+            if (index !== undefined && index >= 0) {
+              mesh.morphTargetInfluences[index] = element.score;
+            }
+          }
         });
       });
 
-      nodes.Head.rotation.set(rotation.x, rotation.y, rotation.z);
-      nodes.Neck.rotation.set(
-        rotation.x / 5 + 0.3,
-        rotation.y / 5,
-        rotation.z / 5,
-      );
-      nodes.Spine2.rotation.set(rotation.x / 5, rotation.y / 5, rotation.z / 5);
+      // Safely access rotation nodes
+      if (nodes.Head) {
+        nodes.Head.rotation.set(rotation.x, rotation.y, rotation.z);
+      }
+      if (nodes.Neck) {
+        nodes.Neck.rotation.set(
+          rotation.x / 5 + 0.3,
+          rotation.y / 5,
+          rotation.z / 5,
+        );
+      }
+      if (nodes.Spine2) {
+        nodes.Spine2.rotation.set(rotation.x / 5, rotation.y / 5, rotation.z / 5);
+      }
     }
   });
 
