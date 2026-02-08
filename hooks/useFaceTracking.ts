@@ -9,20 +9,39 @@ export interface BlendshapeCategory {
 
 let faceLandmarker: FaceLandmarker | null = null;
 
-export function useFaceTracking() {
+interface UseFaceTrackingOptions {
+  onDataChange?: (blendshapes: BlendshapeCategory[], rotation: Euler) => void;
+}
+
+export function useFaceTracking(options?: UseFaceTrackingOptions) {
+  const { onDataChange } = options || {};
   const [blendshapes, setBlendshapes] = useState<BlendshapeCategory[]>([]);
   const [rotation, setRotation] = useState<Euler>(new Euler());
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastCallbackTimeRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const isPredictingRef = useRef(false);
+  const onDataChangeRef = useRef(onDataChange);
+  const targetFPS = 30; // Target 30fps for data sync
+  const frameInterval = 1000 / targetFPS; // ~33ms between frames
+
+  // Update ref when callback changes (without triggering re-initialization)
+  useEffect(() => {
+    onDataChangeRef.current = onDataChange;
+  }, [onDataChange]);
 
   useEffect(() => {
-    let lastVideoTime = -1;
     let isMounted = true;
+    let lastVideoTime = -1;
 
     const setup = async () => {
       try {
+        // Prevent multiple initializations
+        if (isPredictingRef.current || streamRef.current) {
+          return;
+        }
+
         // Initialize face landmarker if not already initialized
         if (!faceLandmarker) {
           const filesetResolver = await FilesetResolver.forVisionTasks(
@@ -45,9 +64,8 @@ export function useFaceTracking() {
         // Check if video ref is available
         if (!videoRef.current) {
           console.warn("Video ref not available yet, retrying...");
-          // Wait a bit and retry
           setTimeout(() => {
-            if (isMounted && videoRef.current) {
+            if (isMounted && videoRef.current && !isPredictingRef.current && !streamRef.current) {
               setup();
             }
           }, 100);
@@ -60,9 +78,14 @@ export function useFaceTracking() {
           audio: false,
         });
         
+        if (!isMounted) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+
         streamRef.current = stream;
 
-        if (videoRef.current && isMounted) {
+        if (videoRef.current) {
           videoRef.current.srcObject = stream;
           
           // Ensure video plays
@@ -72,7 +95,7 @@ export function useFaceTracking() {
           
           // Wait for video to be ready
           const handleLoadedData = () => {
-            if (isMounted && !isPredictingRef.current && videoRef.current) {
+            if (isMounted && !isPredictingRef.current && videoRef.current && faceLandmarker) {
               videoRef.current.play().catch(console.error);
               startPrediction();
             }
@@ -128,12 +151,22 @@ export function useFaceTracking() {
                 const matrix = new Matrix4().fromArray(
                   result.facialTransformationMatrixes[0].data,
                 );
-                setRotation(new Euler().setFromRotationMatrix(matrix));
+                const newRotation = new Euler().setFromRotationMatrix(matrix);
+                setRotation(newRotation);
+
+                // Throttle callback to ~30fps
+                if (onDataChangeRef.current) {
+                  const now = Date.now();
+                  if (now - lastCallbackTimeRef.current >= frameInterval) {
+                    lastCallbackTimeRef.current = now;
+                    onDataChangeRef.current(categories, newRotation);
+                  }
+                }
               }
             }
           }
 
-          if (isMounted) {
+          if (isMounted && animationFrameRef.current !== null) {
             animationFrameRef.current = requestAnimationFrame(predict);
           } else {
             isPredictingRef.current = false;
@@ -144,7 +177,9 @@ export function useFaceTracking() {
         }
       };
 
-      animationFrameRef.current = requestAnimationFrame(predict);
+      if (isMounted) {
+        animationFrameRef.current = requestAnimationFrame(predict);
+      }
     };
 
     setup();
@@ -172,6 +207,8 @@ export function useFaceTracking() {
         videoRef.current.srcObject = null;
       }
     };
+    // Only run once on mount - don't depend on onDataChange to prevent re-initialization
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return { blendshapes, rotation, videoRef };

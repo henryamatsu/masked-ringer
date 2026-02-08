@@ -1,190 +1,256 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Room, RoomEvent, RemoteParticipant, LocalParticipant, TrackPublication, Track, createLocalAudioTrack } from "livekit-client";
+import { useEffect, useState, useRef, useCallback } from "react";
+import {
+  Room,
+  RoomEvent,
+  RemoteParticipant,
+  LocalTrackPublication,
+  createLocalAudioTrack,
+} from "livekit-client";
+import { BlendshapeCategory } from "./useFaceTracking";
+import { Euler } from "three";
+
+export interface RemoteParticipantData {
+  participantId: string;
+  name: string;
+  blendshapes: BlendshapeCategory[];
+  rotation: Euler;
+  isSpeaking: boolean;
+}
 
 interface UseLiveKitRoomReturn {
   room: Room | null;
-  participants: Map<string, RemoteParticipant | LocalParticipant>;
+  participants: RemoteParticipantData[];
+  isConnected: boolean;
   isMuted: boolean;
   toggleMute: () => void;
   disconnect: () => void;
-  isConnected: boolean;
-  error: string | null;
+  sendFaceData: (blendshapes: BlendshapeCategory[], rotation: Euler) => void;
 }
 
 export function useLiveKitRoom(
   roomName: string,
   participantName: string,
-  token: string,
-  livekitUrl: string
 ): UseLiveKitRoomReturn {
   const [room, setRoom] = useState<Room | null>(null);
-  const [participants, setParticipants] = useState<Map<string, RemoteParticipant | LocalParticipant>>(new Map());
-  const [isMuted, setIsMuted] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const localAudioTrackRef = useRef<TrackPublication | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [remoteParticipants, setRemoteParticipants] = useState<
+    Map<string, RemoteParticipantData>
+  >(new Map());
+  const localFaceDataRef = useRef<{
+    blendshapes: BlendshapeCategory[];
+    rotation: Euler;
+  } | null>(null);
+  const audioTrackRef = useRef<LocalTrackPublication | null>(null);
 
+  // Fetch token and connect to room
   useEffect(() => {
-    // Don't connect if already connected or missing required params
-    if (!roomName || !participantName || !token || !livekitUrl) {
-      return;
-    }
-
-    // If already connected, don't reconnect
-    if (isConnected && room) {
+    // Don't connect if roomName or participantName is empty
+    if (!roomName || !participantName) {
       return;
     }
 
     let currentRoom: Room | null = null;
-    let isMounted = true;
 
-    const connectToRoom = async () => {
-      setError(null);
+    const connect = async () => {
       try {
-        const newRoom = new Room();
-        currentRoom = newRoom;
-        
-        // Set up event handlers before connecting
-        newRoom.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
-          console.log("Participant connected:", participant.identity);
-          if (isMounted) {
-            setParticipants((prev) => {
-              const updated = new Map(prev);
-              updated.set(participant.identity, participant);
-              return updated;
+        // Fetch token from API
+        const response = await fetch("/api/livekit-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roomName, participantName }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+          throw new Error(errorData.error || `Failed to get token: ${response.status}`);
+        }
+
+        const { token } = await response.json();
+        const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+
+        if (!livekitUrl) {
+          throw new Error("LIVEKIT_URL not configured. Please set NEXT_PUBLIC_LIVEKIT_URL in .env.local");
+        }
+
+        // Create and connect to room
+        currentRoom = new Room();
+        setRoom(currentRoom);
+
+        // Set up event listeners
+        currentRoom.on(RoomEvent.Connected, async () => {
+          console.log("Connected to room");
+          setIsConnected(true);
+
+          // Set participant metadata (if permission allows)
+          try {
+            currentRoom?.localParticipant.setMetadata(
+              JSON.stringify({ name: participantName }),
+            );
+          } catch (error) {
+            console.warn("Could not set metadata:", error);
+            // Continue without metadata - not critical
+          }
+
+          // Publish microphone audio track
+          try {
+            const audioTrack = await createLocalAudioTrack();
+            const publication =
+              await currentRoom?.localParticipant.publishTrack(audioTrack);
+            if (publication) {
+              audioTrackRef.current = publication;
+              setIsMuted(false);
+            }
+          } catch (error) {
+            console.error("Failed to publish audio track:", error);
+          }
+        });
+
+        // Listen for remote audio tracks
+        currentRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          if (track.kind === "audio" && participant) {
+            // Attach audio track to audio element
+            const audioElement = track.attach();
+            audioElement.play().catch((err) => {
+              console.error("Failed to play remote audio:", err);
             });
           }
         });
 
-        newRoom.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
-          console.log("Participant disconnected:", participant.identity);
-          if (isMounted) {
-            setParticipants((prev) => {
+        currentRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
+          track.detach();
+        });
+
+        // Listen for data messages (face tracking data)
+        currentRoom.on(RoomEvent.DataReceived, (payload, participant) => {
+          if (
+            !participant ||
+            participant.identity === currentRoom?.localParticipant.identity
+          ) {
+            return; // Ignore our own data
+          }
+
+          try {
+            const decoder = new TextDecoder();
+            const dataStr = decoder.decode(payload);
+            const data = JSON.parse(dataStr);
+
+            if (data.type === "face-data" && data.participantId) {
+              setRemoteParticipants((prev) => {
+                const updated = new Map(prev);
+                const existing = updated.get(data.participantId) || {
+                  participantId: data.participantId,
+                  name: data.name || participant?.identity || "Unknown",
+                  blendshapes: [],
+                  rotation: new Euler(),
+                  isSpeaking: false,
+                };
+                updated.set(data.participantId, {
+                  ...existing,
+                  blendshapes: data.blendshapes || existing.blendshapes,
+                  rotation: data.rotation
+                    ? new Euler(
+                        data.rotation.x,
+                        data.rotation.y,
+                        data.rotation.z,
+                      )
+                    : existing.rotation,
+                });
+                return updated;
+              });
+            }
+          } catch (error) {
+            console.error("Error parsing face data:", error);
+          }
+        });
+
+        currentRoom.on(RoomEvent.Disconnected, () => {
+          console.log("Disconnected from room");
+          setIsConnected(false);
+        });
+
+        currentRoom.on(
+          RoomEvent.ParticipantConnected,
+          (participant: RemoteParticipant) => {
+            console.log("Participant connected:", participant.identity);
+            // Parse metadata for name
+            let name = participant.identity;
+            try {
+              const metadata = JSON.parse(participant.metadata || "{}");
+              name = metadata.name || participant.identity;
+            } catch {}
+
+            setRemoteParticipants((prev) => {
+              const updated = new Map(prev);
+              updated.set(participant.identity, {
+                participantId: participant.identity,
+                name,
+                blendshapes: [],
+                rotation: new Euler(),
+                isSpeaking: false,
+              });
+              return updated;
+            });
+
+            // Listen for speaking events
+            participant.on("isSpeakingChanged", () => {
+              setRemoteParticipants((prev) => {
+                const updated = new Map(prev);
+                const existing = updated.get(participant.identity);
+                if (existing) {
+                  updated.set(participant.identity, {
+                    ...existing,
+                    isSpeaking: participant.isSpeaking,
+                  });
+                }
+                return updated;
+              });
+            });
+          },
+        );
+
+        currentRoom.on(
+          RoomEvent.ParticipantDisconnected,
+          (participant: RemoteParticipant) => {
+            console.log("Participant disconnected:", participant.identity);
+            setRemoteParticipants((prev) => {
               const updated = new Map(prev);
               updated.delete(participant.identity);
               return updated;
             });
-          }
-        });
-
-        newRoom.on(RoomEvent.TrackSubscribed, (track: Track, publication: TrackPublication, participant: RemoteParticipant) => {
-          console.log("Track subscribed:", track.kind, participant.identity);
-          if (track.kind === "audio") {
-            // Attach audio track to audio element
-            const audioElement = track.attach();
-            audioElement.play().catch((err) => {
-              console.error("Failed to play audio:", err);
-            });
-          }
-        });
-
-        newRoom.on(RoomEvent.TrackUnsubscribed, (track: Track, publication: TrackPublication, participant: RemoteParticipant) => {
-          console.log("Track unsubscribed:", track.kind, participant.identity);
-          track.detach();
-        });
-
-        newRoom.on(RoomEvent.Disconnected, () => {
-          console.log("Disconnected from room");
-          if (isMounted) {
-            setIsConnected(false);
-            setParticipants(new Map());
-            setRoom(null);
-          }
-        });
+          },
+        );
 
         // Connect to room
-        await newRoom.connect(livekitUrl, token);
-        
-        if (!isMounted) {
-          newRoom.disconnect();
-          return;
-        }
-        
-        // Get local audio track
-        const localParticipant = newRoom.localParticipant;
-        
-        // Request microphone access and publish audio track
-        try {
-          const localTrack = await createLocalAudioTrack();
-          const publication = await localParticipant.publishTrack(localTrack);
-          localAudioTrackRef.current = publication;
-          if (isMounted) {
-            setIsMuted(false);
-          }
-        } catch (err) {
-          console.error("Failed to get microphone access:", err);
-          // Continue without audio if mic access is denied
-        }
-
-        if (!isMounted) {
-          newRoom.disconnect();
-          return;
-        }
-
-        // Add local participant to participants map
-        setParticipants((prev) => {
-          const updated = new Map(prev);
-          updated.set(localParticipant.identity, localParticipant);
-          return updated;
-        });
-
-        // Add existing remote participants
-        newRoom.remoteParticipants.forEach((participant) => {
-          setParticipants((prev) => {
-            const updated = new Map(prev);
-            updated.set(participant.identity, participant);
-            return updated;
-          });
-        });
-
-        setRoom(newRoom);
-        setIsConnected(true);
-        setError(null);
+        await currentRoom.connect(livekitUrl, token);
       } catch (error) {
         console.error("Failed to connect to room:", error);
-        if (isMounted) {
-          setIsConnected(false);
-          setRoom(null);
-          setError(error instanceof Error ? error.message : "Failed to connect to room");
-        }
-        if (currentRoom) {
-          currentRoom.disconnect();
-        }
+        setIsConnected(false);
       }
     };
 
-    connectToRoom();
+    connect();
 
     return () => {
-      isMounted = false;
       if (currentRoom) {
         currentRoom.disconnect();
       }
     };
-  }, [roomName, participantName, token, livekitUrl]);
+  }, [roomName, participantName]);
 
-  const toggleMute = useCallback(() => {
-    if (!room) return;
+  const toggleMute = useCallback(async () => {
+    if (!room || !audioTrackRef.current) return;
 
-    const localParticipant = room.localParticipant;
-    const audioTracks = Array.from(localParticipant.audioTrackPublications.values());
-
-    if (isMuted) {
-      // Unmute: enable all audio tracks
-      audioTracks.forEach((publication) => {
-        if (publication.track) {
-          publication.track.unmute();
-        }
-      });
-      setIsMuted(false);
-    } else {
-      // Mute: disable all audio tracks
-      audioTracks.forEach((publication) => {
-        if (publication.track) {
-          publication.track.mute();
-        }
-      });
-      setIsMuted(true);
+    try {
+      if (isMuted) {
+        await audioTrackRef.current.track?.unmute();
+        setIsMuted(false);
+      } else {
+        await audioTrackRef.current.track?.mute();
+        setIsMuted(true);
+      }
+    } catch (error) {
+      console.error("Error toggling mute:", error);
     }
   }, [room, isMuted]);
 
@@ -193,18 +259,51 @@ export function useLiveKitRoom(
       room.disconnect();
       setRoom(null);
       setIsConnected(false);
-      setParticipants(new Map());
-      setError(null);
     }
   }, [room]);
+
+  const sendFaceData = useCallback(
+    (blendshapes: BlendshapeCategory[], rotation: Euler) => {
+      if (!room || !isConnected) {
+        return;
+      }
+
+      // Store latest data
+      localFaceDataRef.current = { blendshapes, rotation };
+
+      // Send via LiveKit data channel
+      try {
+        const data = {
+          type: "face-data",
+          participantId: room.localParticipant.identity,
+          name: participantName,
+          blendshapes,
+          rotation: {
+            x: rotation.x,
+            y: rotation.y,
+            z: rotation.z,
+          },
+        };
+        const encoder = new TextEncoder();
+        const encoded = encoder.encode(JSON.stringify(data));
+        // Use unreliable data channel for lower latency (acceptable packet loss for animation data)
+        room.localParticipant.publishData(encoded, { reliable: false });
+      } catch (error) {
+        console.error("Error sending face data:", error);
+      }
+    },
+    [room, participantName, isConnected],
+  );
+
+  const participants = Array.from(remoteParticipants.values());
 
   return {
     room,
     participants,
+    isConnected,
     isMuted,
     toggleMute,
     disconnect,
-    isConnected,
-    error,
+    sendFaceData,
   };
 }

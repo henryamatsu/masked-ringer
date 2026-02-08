@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
     if (!roomName || !participantName) {
       return NextResponse.json(
         { error: "Missing roomName or participantName" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     if (!apiKey || !apiSecret) {
       return NextResponse.json(
         { error: "LiveKit credentials not configured" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
       roomJoin: true,
       canPublish: true,
       canSubscribe: true,
+      canPublishData: true,
+      canUpdateOwnMetadata: true,
     });
 
     const token = await at.toJwt();
@@ -40,7 +42,7 @@ export async function POST(request: NextRequest) {
     console.error("Error generating LiveKit token:", error);
     return NextResponse.json(
       { error: "Failed to generate token" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
