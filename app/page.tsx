@@ -18,11 +18,18 @@ export default function HomePage() {
   const handleCreateRoom = async () => {
     setIsCreating(true);
     try {
+      console.log("Creating room...");
       const roomId = await createRoom({});
-      router.push(`/room/${roomId}`);
+      console.log("Room created with ID:", roomId);
+      if (roomId) {
+        console.log("Navigating to:", `/room/${roomId}`);
+        router.push(`/room/${roomId}`);
+      } else {
+        throw new Error("Room ID was not returned");
+      }
     } catch (error) {
       console.error("Failed to create room:", error);
-      alert("Failed to create room. Please try again.");
+      alert(`Failed to create room: ${error instanceof Error ? error.message : String(error)}`);
       setIsCreating(false);
     }
   };

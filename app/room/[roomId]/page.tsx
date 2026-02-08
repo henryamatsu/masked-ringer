@@ -37,18 +37,25 @@ export default function RoomPage({
   const participants = useQuery(api.participants.listByRoom, { roomId });
   const joinRoom = useMutation(api.participants.join);
   const leaveRoom = useMutation(api.participants.leave);
+  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false);
 
   useEffect(() => {
-    // Check if room exists and is active
-    if (room === null) {
-      // Still loading
-      return;
+    // Mark that we've attempted to load after a short delay
+    if (!hasAttemptedLoad) {
+      const timer = setTimeout(() => {
+        setHasAttemptedLoad(true);
+      }, 500);
+      return () => clearTimeout(timer);
     }
-    if (room === undefined || !room.isActive) {
-      router.push("/");
-      return;
+
+    // Only redirect if we've given it time to load AND room is explicitly undefined or inactive
+    // Don't redirect if room is still loading (undefined but hasn't been long enough)
+    if (hasAttemptedLoad && room !== undefined) {
+      if (!room || !room.isActive) {
+        router.push("/");
+      }
     }
-  }, [room, router]);
+  }, [room, router, hasAttemptedLoad]);
 
   const handleJoin = async () => {
     if (!participantName.trim()) {
@@ -84,8 +91,8 @@ export default function RoomPage({
     router.push("/");
   };
 
-  // Show loading state
-  if (room === null || participants === null) {
+  // Show loading state while query is loading
+  if (room === undefined || participants === undefined) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div>Loading room...</div>
