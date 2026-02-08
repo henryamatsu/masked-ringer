@@ -3,7 +3,7 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { FaceTracker } from "@/components/FaceTracker";
@@ -17,10 +17,11 @@ const AvatarScene = dynamic(
 export default function RoomPage({
   params,
 }: {
-  params: { roomId: string };
+  params: Promise<{ roomId: string }>;
 }) {
   const router = useRouter();
-  const roomId = params.roomId as Id<"rooms">;
+  const { roomId: roomIdParam } = use(params);
+  const roomId = roomIdParam as Id<"rooms">;
   const [participantName, setParticipantName] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("participantName") || "";
